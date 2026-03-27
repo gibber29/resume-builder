@@ -4,7 +4,7 @@ import { chatWithGemini } from '../../api/gemini';
 
 const GEMINI_MODEL_LABEL = import.meta.env.VITE_GEMINI_MODEL || 'gemini-2.0-flash';
 
-const ChatAi = ({ resumeData, latexCode, onUpdateData, onUpdateLatex }) => {
+const ChatAi = ({ resumeData, latexCode, onUpdateData, onUpdateLatex, hasGeminiApiKey, onRequireGeminiAccess, chatCommand, onChatCommandHandled }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState([
     { role: 'ai', content: "Hi! I'm your AI career coach. How can I help you improve your resume today?" }
@@ -44,11 +44,16 @@ const ChatAi = ({ resumeData, latexCode, onUpdateData, onUpdateLatex }) => {
     return () => window.clearInterval(intervalId);
   }, [quotaBlockedUntil]);
 
-  const handleSend = async () => {
-    if (!input.trim() || isLoading || retryCountdown > 0) return;
+  const sendMessage = async (rawMessage) => {
+    const userMsg = `${rawMessage || ''}`.trim();
+    if (!userMsg || isLoading || retryCountdown > 0) return;
 
-    const userMsg = input.trim();
-    setInput("");
+    if (!hasGeminiApiKey) {
+      onRequireGeminiAccess?.({ type: 'chat_send', message: userMsg });
+      return;
+    }
+
+    setInput((currentInput) => (currentInput.trim() === userMsg ? "" : currentInput));
     setMessages(prev => [...prev, { role: 'user', content: userMsg }]);
     setIsLoading(true);
 
@@ -64,6 +69,16 @@ const ChatAi = ({ resumeData, latexCode, onUpdateData, onUpdateLatex }) => {
         onUpdateLatex(result.updatedLatex);
       }
     } catch (error) {
+      if (error?.code === 'invalid_api_key' || error?.code === 'missing_api_key') {
+        onRequireGeminiAccess?.({
+          type: 'chat_send',
+          message: userMsg,
+          errorMessage: error.message || 'Please enter a valid Gemini API key.',
+          forcePrompt: true,
+        });
+        return;
+      }
+
       if (error?.code === 'quota_exceeded') {
         const retrySeconds = Number(error?.retrySeconds) || 15;
         setQuotaBlockedUntil(Date.now() + retrySeconds * 1000);
@@ -74,6 +89,25 @@ const ChatAi = ({ resumeData, latexCode, onUpdateData, onUpdateLatex }) => {
       setIsLoading(false);
     }
   };
+
+  const handleSend = async () => {
+    await sendMessage(input);
+  };
+
+  useEffect(() => {
+    if (!chatCommand?.id) return;
+
+    if (chatCommand.type === 'open') {
+      setIsOpen(true);
+    }
+
+    if (chatCommand.type === 'send' && chatCommand.message) {
+      setIsOpen(true);
+      void sendMessage(chatCommand.message);
+    }
+
+    onChatCommandHandled?.();
+  }, [chatCommand]);
 
   return (
     <div className={`fixed bottom-8 right-8 z-50 flex flex-col transition-all duration-500 ${isOpen ? 'w-[400px] h-[600px]' : 'w-16 h-16'}`}>
@@ -150,7 +184,14 @@ const ChatAi = ({ resumeData, latexCode, onUpdateData, onUpdateLatex }) => {
         </div>
       ) : (
         <button
-          onClick={() => setIsOpen(true)}
+          onClick={() => {
+            if (!hasGeminiApiKey) {
+              onRequireGeminiAccess?.({ type: 'chat_open' });
+              return;
+            }
+
+            setIsOpen(true);
+          }}
           className="w-16 h-16 bg-gradient-to-br from-primary-500 to-indigo-600 hover:from-primary-400 hover:to-indigo-500 rounded-full flex items-center justify-center shadow-2xl shadow-primary-900/40 border border-white/10 transition-all hover:scale-110 active:scale-95 group"
         >
           <Bot className="w-8 h-8 text-white group-hover:animate-bounce" />

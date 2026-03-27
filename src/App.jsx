@@ -132,6 +132,8 @@ function App() {
   const [geminiApiKeyInput, setGeminiApiKeyInput] = useState("");
   const [geminiApiKeyError, setGeminiApiKeyError] = useState("");
   const [shouldForceGeminiKeyPrompt, setShouldForceGeminiKeyPrompt] = useState(false);
+  const [pendingGeminiAction, setPendingGeminiAction] = useState(null);
+  const [chatCommand, setChatCommand] = useState(null);
   const previewRef = useRef(null);
   const containerRef = useRef(null);
   const [previewScale, setPreviewScale] = useState(1);
@@ -283,6 +285,7 @@ function App() {
       if (error?.code === 'invalid_api_key' || error?.code === 'missing_api_key') {
         clearGeminiApiKey();
         setShouldForceGeminiKeyPrompt(true);
+        setPendingGeminiAction({ type: 'analyze' });
         setGeminiApiKeyInput("");
         setGeminiApiKeyError(error.message || 'Please enter a valid Gemini API key.');
         setShowGeminiKeyPrompt(true);
@@ -297,6 +300,7 @@ function App() {
   // ATS analysis is now triggered manually via the "Check ATS & Improve" button.
   const handleAnalyze = async () => {
     if (shouldForceGeminiKeyPrompt || !hasUserProvidedGeminiApiKey()) {
+      setPendingGeminiAction({ type: 'analyze' });
       setGeminiApiKeyError("");
       setGeminiApiKeyInput("");
       setShowGeminiKeyPrompt(true);
@@ -304,6 +308,14 @@ function App() {
     }
 
     await runAnalyze();
+  };
+
+  const requestGeminiAccess = ({ type, message = '', errorMessage = '', forcePrompt = false } = {}) => {
+    setPendingGeminiAction({ type, message });
+    setShouldForceGeminiKeyPrompt(Boolean(forcePrompt));
+    setGeminiApiKeyError(errorMessage || '');
+    setGeminiApiKeyInput('');
+    setShowGeminiKeyPrompt(true);
   };
 
   const handleSaveGeminiApiKey = async () => {
@@ -317,7 +329,23 @@ function App() {
     setShouldForceGeminiKeyPrompt(false);
     setGeminiApiKeyError("");
     setShowGeminiKeyPrompt(false);
-    await runAnalyze();
+
+    const nextAction = pendingGeminiAction;
+    setPendingGeminiAction(null);
+
+    if (nextAction?.type === 'analyze') {
+      await runAnalyze();
+      return;
+    }
+
+    if (nextAction?.type === 'chat_open') {
+      setChatCommand({ type: 'open', id: crypto.randomUUID() });
+      return;
+    }
+
+    if (nextAction?.type === 'chat_send' && nextAction.message) {
+      setChatCommand({ type: 'send', message: nextAction.message, id: crypto.randomUUID() });
+    }
   };
 
   const handleApplyImprovements = async () => {
@@ -442,6 +470,7 @@ function App() {
                 onClick={() => {
                   clearGeminiApiKey();
                   setShouldForceGeminiKeyPrompt(true);
+                  setPendingGeminiAction(null);
                   setShowGeminiKeyPrompt(false);
                   setGeminiApiKeyError("");
                   setGeminiApiKeyInput("");
@@ -729,6 +758,10 @@ function App() {
         latexCode={latexCode}
         onUpdateData={handleAiUpdateData}
         onUpdateLatex={(newLatex) => setLatexCode(newLatex)}
+        hasGeminiApiKey={hasUserProvidedGeminiApiKey()}
+        onRequireGeminiAccess={requestGeminiAccess}
+        chatCommand={chatCommand}
+        onChatCommandHandled={() => setChatCommand(null)}
       />
     </div>
   );

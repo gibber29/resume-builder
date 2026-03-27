@@ -707,7 +707,7 @@ ${projects.filter(p => p.name).map(proj => `
 
 \\cvsection{About Me}
 \\begin{quote}
-``${escape(personalInfo.summary)}''
+\\textquotedblleft{}${escape(personalInfo.summary)}\\textquotedblright{}
 \\end{quote}
 
 \\cvsection{Education}
