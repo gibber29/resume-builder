@@ -5,7 +5,7 @@ import EducationForm from './features/resume-form/EducationForm'
 import ExperienceForm from './features/resume-form/ExperienceForm'
 import SkillsForm from './features/resume-form/SkillsForm'
 import ProjectsForm from './features/resume-form/ProjectsForm'
-import { analyzeResume, improveResumeWithGemini } from './api/gemini'
+import { analyzeResume, improveResumeWithGemini, hasUserProvidedGeminiApiKey, setGeminiApiKey, clearGeminiApiKey } from './api/gemini'
 import TemplateGallery from './features/templates/TemplateGallery'
 import { TEMPLATES } from './features/templates/templateDefinitions'
 import { generateLatex } from './utils/latexGenerator'
@@ -128,6 +128,10 @@ function App() {
   const [suggestedChangeSummary, setSuggestedChangeSummary] = useState(null);
   const [viewMode, setViewMode] = useState('preview');
   const [latexCode, setLatexCode] = useState("");
+  const [showGeminiKeyPrompt, setShowGeminiKeyPrompt] = useState(false);
+  const [geminiApiKeyInput, setGeminiApiKeyInput] = useState("");
+  const [geminiApiKeyError, setGeminiApiKeyError] = useState("");
+  const [shouldForceGeminiKeyPrompt, setShouldForceGeminiKeyPrompt] = useState(false);
   const previewRef = useRef(null);
   const containerRef = useRef(null);
   const [previewScale, setPreviewScale] = useState(1);
@@ -271,16 +275,49 @@ function App() {
     }, 100);
   };
 
-  // ATS analysis is now triggered manually via the "Check ATS & Improve" button.
-  const handleAnalyze = async () => {
+  const runAnalyze = async () => {
     setIsAnalyzing(true);
     try {
       await refreshAtsAnalysis(activeResumeData);
     } catch (error) {
+      if (error?.code === 'invalid_api_key' || error?.code === 'missing_api_key') {
+        clearGeminiApiKey();
+        setShouldForceGeminiKeyPrompt(true);
+        setGeminiApiKeyInput("");
+        setGeminiApiKeyError(error.message || 'Please enter a valid Gemini API key.');
+        setShowGeminiKeyPrompt(true);
+        return;
+      }
       alert(`Analysis Error: ${error.message || error}`);
     } finally {
       setIsAnalyzing(false);
     }
+  };
+
+  // ATS analysis is now triggered manually via the "Check ATS & Improve" button.
+  const handleAnalyze = async () => {
+    if (shouldForceGeminiKeyPrompt || !hasUserProvidedGeminiApiKey()) {
+      setGeminiApiKeyError("");
+      setGeminiApiKeyInput("");
+      setShowGeminiKeyPrompt(true);
+      return;
+    }
+
+    await runAnalyze();
+  };
+
+  const handleSaveGeminiApiKey = async () => {
+    const normalizedApiKey = geminiApiKeyInput.trim();
+    if (!normalizedApiKey) {
+      setGeminiApiKeyError('Please enter your Gemini API key to continue.');
+      return;
+    }
+
+    setGeminiApiKey(normalizedApiKey);
+    setShouldForceGeminiKeyPrompt(false);
+    setGeminiApiKeyError("");
+    setShowGeminiKeyPrompt(false);
+    await runAnalyze();
   };
 
   const handleApplyImprovements = async () => {
@@ -365,6 +402,64 @@ function App() {
   // ── Main Editor ─────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 p-8 font-sans selection:bg-primary-500/30">
+      {showGeminiKeyPrompt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 px-6 backdrop-blur-sm">
+          <div className="w-full max-w-lg rounded-3xl border border-slate-700 bg-slate-900 p-6 shadow-2xl">
+            <div className="inline-flex items-center gap-2 rounded-full border border-primary-500/20 bg-primary-500/10 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.24em] text-primary-300">
+              <Sparkles className="w-3 h-3" /> Gemini Setup
+            </div>
+            <h3 className="mt-4 text-2xl font-bold text-slate-100">Enter your Gemini API key</h3>
+            <p className="mt-3 text-sm leading-6 text-slate-300">
+              This is required before your first Gemini analysis. It is recommended to use a Tier 1 billing key for a smooth experience.
+            </p>
+            <div className="mt-5">
+              <label className="mb-2 block text-xs font-bold uppercase tracking-widest text-slate-400">
+                Gemini API Key
+              </label>
+              <input
+                type="password"
+                value={geminiApiKeyInput}
+                onChange={(event) => {
+                  setGeminiApiKeyInput(event.target.value);
+                  if (geminiApiKeyError) {
+                    setGeminiApiKeyError("");
+                  }
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    handleSaveGeminiApiKey();
+                  }
+                }}
+                placeholder="Paste your Gemini API key"
+                className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+              />
+              {geminiApiKeyError && (
+                <p className="mt-2 text-xs text-red-300">{geminiApiKeyError}</p>
+              )}
+            </div>
+            <div className="mt-6 flex gap-3">
+              <button
+                onClick={() => {
+                  clearGeminiApiKey();
+                  setShouldForceGeminiKeyPrompt(true);
+                  setShowGeminiKeyPrompt(false);
+                  setGeminiApiKeyError("");
+                  setGeminiApiKeyInput("");
+                }}
+                className="flex-1 rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-xs font-bold uppercase tracking-widest text-slate-200 transition-all hover:bg-slate-700"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveGeminiApiKey}
+                className="flex-1 rounded-xl border border-white/10 bg-gradient-to-r from-primary-600 to-indigo-600 px-4 py-3 text-xs font-bold uppercase tracking-widest text-white transition-all hover:from-primary-500 hover:to-indigo-500"
+              >
+                Save And Analyze
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <header className="max-w-7xl mx-auto mb-10 flex justify-between items-end">
         <div>
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary-500/10 border border-primary-500/20 text-primary-400 text-xs font-bold uppercase tracking-widest mb-3">

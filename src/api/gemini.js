@@ -1,8 +1,29 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
-const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
-const genAI = new GoogleGenerativeAI(API_KEY);
 const GEMINI_MODEL = import.meta.env.VITE_GEMINI_MODEL || "gemini-2.0-flash";
+
+const normalizeApiKey = (apiKey) =>
+  `${apiKey || ''}`
+    .replace(/["'`]/g, '')
+    .replace(/\s+/g, '')
+    .trim();
+
+let runtimeApiKey = '';
+
+export const getConfiguredGeminiApiKey = () => normalizeApiKey(runtimeApiKey);
+
+export const hasConfiguredGeminiApiKey = () => Boolean(getConfiguredGeminiApiKey());
+
+export const hasUserProvidedGeminiApiKey = () => Boolean(runtimeApiKey);
+
+export const setGeminiApiKey = (apiKey) => {
+  const normalizedApiKey = normalizeApiKey(apiKey);
+  runtimeApiKey = normalizedApiKey;
+};
+
+export const clearGeminiApiKey = () => {
+  setGeminiApiKey('');
+};
 
 const SYSTEM_INSTRUCTION = `
 You are an ATS (Applicant Tracking System) scoring engine and resume optimization specialist.
@@ -74,10 +95,20 @@ When rewriting bullet points, return:
 { "original": string, "refined": string, "reason": string }
 `;
 
-const model = genAI.getGenerativeModel({ 
-  model: GEMINI_MODEL,
-  systemInstruction: SYSTEM_INSTRUCTION,
-});
+const getGeminiModel = () => {
+  const apiKey = getConfiguredGeminiApiKey();
+  if (!apiKey) {
+    const apiKeyError = new Error("Gemini API key is missing. Add your Gemini API key and try again.");
+    apiKeyError.code = 'missing_api_key';
+    throw apiKeyError;
+  }
+
+  const genAI = new GoogleGenerativeAI(apiKey);
+  return genAI.getGenerativeModel({
+    model: GEMINI_MODEL,
+    systemInstruction: SYSTEM_INSTRUCTION,
+  });
+};
 
 const truncateText = (value = "", max = 280) => {
   const normalizedValue = `${value}`.replace(/\s+/g, " ").trim();
@@ -209,6 +240,33 @@ const buildChatPrompt = (message, resumeData, latexCode) => {
     `;
 };
 
+const buildAnalysisPrompt = (resumeData, selectedTemplate = null) => `
+Analyze this resume for ATS quality and return only valid JSON matching the required schema from the system instruction.
+
+Selected Template:
+${JSON.stringify(
+  selectedTemplate
+    ? {
+        id: selectedTemplate.id || '',
+        name: selectedTemplate.name || '',
+        pageFormat: selectedTemplate.pageFormat || '',
+      }
+    : null,
+  null,
+  2
+)}
+
+Resume JSON:
+${JSON.stringify(resumeData, null, 2)}
+
+Requirements:
+- Base the likely target role only on the provided resume.
+- Be strict but fair.
+- Keep key_issues to 3 to 5 items.
+- Keep improvements to 4 to 6 items.
+- Do not include markdown fences or any extra commentary.
+`;
+
 const constrainChatResult = (message, result) => {
   if (!result || typeof result !== 'object') return result;
 
@@ -241,6 +299,17 @@ const formatGeminiError = (error) => {
   const rawMessage = error?.message || "Unknown error";
   const retrySeconds = extractRetryDelay(rawMessage);
 
+  if (
+    rawMessage.includes('API key expired') ||
+    rawMessage.includes('API_KEY_INVALID') ||
+    rawMessage.includes('Your API key was reported as leaked') ||
+    rawMessage.includes('Please use another API key')
+  ) {
+    const invalidKeyError = new Error('Your Gemini API key was rejected. Please enter a different key.');
+    invalidKeyError.code = 'invalid_api_key';
+    return invalidKeyError;
+  }
+
   if (rawMessage.includes("[429")) {
     const retryLine = retrySeconds ? ` Please wait about ${retrySeconds} seconds and try again.` : "";
     const quotaError = new Error(
@@ -261,8 +330,8 @@ const formatGeminiError = (error) => {
     return modelError;
   }
 
-  if (!API_KEY) {
-    const apiKeyError = new Error("Gemini API key is missing. Set VITE_GEMINI_API_KEY and try again.");
+  if (!getConfiguredGeminiApiKey()) {
+    const apiKeyError = new Error("Gemini API key is missing. Add your Gemini API key and try again.");
     apiKeyError.code = 'missing_api_key';
     return apiKeyError;
   }
@@ -684,7 +753,34 @@ const buildBreakdownObject = (categories) =>
     return acc;
   }, {});
 
-export const analyzeResume = async (resumeData, selectedTemplate = null) => {
+const parseGeminiJson = (responseText = '') => {
+  const jsonStr = responseText.replace(/```json|```/g, "").trim();
+  return JSON.parse(jsonStr);
+};
+
+const clampWeightedScore = (value, max) => Math.max(0, Math.min(max, Number(value) || 0));
+
+const buildGeminiCategories = (breakdown = {}) =>
+  ATS_CATEGORIES.map((category) => {
+    const result = breakdown?.[category.key] || {};
+    const rawScore = clampWeightedScore(result.score, category.weight);
+    const normalizedScore = clampScore((rawScore / category.weight) * 10);
+
+    return {
+      ...category,
+      score: normalizedScore,
+      weightedScore: Number(rawScore.toFixed(1)),
+      rationale: result.reason || 'No rationale provided.',
+    };
+  });
+
+const hasCompleteGeminiBreakdown = (breakdown = {}) =>
+  ATS_CATEGORIES.every((category) => {
+    const result = breakdown?.[category.key];
+    return result && Number.isFinite(Number(result.score)) && `${result.reason || ''}`.trim();
+  });
+
+const buildLocalCategories = (resumeData, selectedTemplate = null) => {
   const breakdownCore = [
     { key: 'formatting', ...analyzeFormatting(resumeData, selectedTemplate) },
     { key: 'keywords', ...analyzeKeywords(resumeData) },
@@ -722,19 +818,36 @@ export const analyzeResume = async (resumeData, selectedTemplate = null) => {
     }
   }
 
-  const score = Math.round(categories.reduce((sum, item) => sum + item.weightedScore, 0));
+  return categories;
+};
 
-  return {
-    score,
-    total_score: score,
-    breakdown: buildBreakdownObject(categories),
-    key_issues: buildKeyIssues(categories),
-    improvements: buildStrictTips(categories, resumeData, selectedTemplate),
-    strengths: buildStrictStrengths(categories, resumeData),
-    tips: buildStrictTips(categories, resumeData, selectedTemplate),
-    categories,
-    rubric: ATS_CATEGORIES.map((item) => ({ label: item.label, weight: item.weight })),
-  };
+export const analyzeResume = async (resumeData, selectedTemplate = null) => {
+  try {
+    const prompt = buildAnalysisPrompt(resumeData, selectedTemplate);
+    const result = await getGeminiModel().generateContent(prompt);
+    const parsed = parseGeminiJson(result.response.text());
+    const categories = hasCompleteGeminiBreakdown(parsed.breakdown)
+      ? buildGeminiCategories(parsed.breakdown)
+      : buildLocalCategories(resumeData, selectedTemplate);
+    const derivedScore = Math.round(categories.reduce((sum, item) => sum + item.weightedScore, 0));
+    const score = hasCompleteGeminiBreakdown(parsed.breakdown)
+      ? Math.max(0, Math.min(100, Number(parsed.total_score) || derivedScore))
+      : derivedScore;
+
+    return {
+      score,
+      total_score: score,
+      breakdown: hasCompleteGeminiBreakdown(parsed.breakdown) ? parsed.breakdown : buildBreakdownObject(categories),
+      key_issues: Array.isArray(parsed.key_issues) && parsed.key_issues.length > 0 ? parsed.key_issues.slice(0, 5) : buildKeyIssues(categories),
+      improvements: Array.isArray(parsed.improvements) && parsed.improvements.length > 0 ? parsed.improvements.slice(0, 6) : buildStrictTips(categories, resumeData, selectedTemplate),
+      strengths: buildStrictStrengths(categories, resumeData),
+      tips: Array.isArray(parsed.improvements) && parsed.improvements.length > 0 ? parsed.improvements.slice(0, 6) : buildStrictTips(categories, resumeData, selectedTemplate),
+      categories,
+      rubric: ATS_CATEGORIES.map((item) => ({ label: item.label, weight: item.weight })),
+    };
+  } catch (error) {
+    throw formatGeminiError(error);
+  }
 };
 
 export const improveResumeWithGemini = async (resumeData, atsData) => {
@@ -782,7 +895,7 @@ export const improveResumeWithGemini = async (resumeData, atsData) => {
       }
     `;
 
-    const result = await model.generateContent(prompt);
+    const result = await getGeminiModel().generateContent(prompt);
     const text = result.response.text();
     const jsonStr = text.replace(/```json|```/g, "").trim();
     return JSON.parse(jsonStr);
@@ -801,7 +914,7 @@ export const refineBulletPoint = async (bulletPoint) => {
       Return a JSON object with the refined version and a brief reason for the change.
     `;
 
-    const result = await model.generateContent(prompt);
+    const result = await getGeminiModel().generateContent(prompt);
     const text = result.response.text();
     const jsonStr = text.replace(/```json|```/g, "").trim();
     return JSON.parse(jsonStr);
@@ -815,7 +928,7 @@ export const chatWithGemini = async (message, resumeData, latexCode) => {
   try {
     const prompt = buildChatPrompt(message, resumeData, latexCode);
 
-    const result = await model.generateContent(prompt);
+    const result = await getGeminiModel().generateContent(prompt);
     const text = result.response.text();
     const jsonStr = text.replace(/```json|```/g, "").trim();
     return constrainChatResult(message, JSON.parse(jsonStr));
