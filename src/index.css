@@ -1,0 +1,77 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+
+  color-scheme: light dark;
+  color: rgba(255, 255, 255, 0.87);
+  background-color: #0f172a;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  display: flex;
+  place-items: center;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+#root {
+  width: 100%;
+}
+
+@media print {
+  @page {
+    margin: 0;
+    size: A4 portrait;
+  }
+
+  html,
+  body {
+    width: auto !important;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+  }
+
+  body.printing-resume #root {
+    display: none !important;
+  }
+
+  #print-mount {
+    display: block !important;
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 210mm !important;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    background: #ffffff !important;
+    box-shadow: none !important;
+  }
+
+  @-moz-document url-prefix() {
+    #print-mount {
+      transform: none;
+      width: 210mm !important;
+    }
+  }
+}
+
+@media screen {
+  #print-mount {
+    display: none !important;
+  }
+}
