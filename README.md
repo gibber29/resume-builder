@@ -1,5 +1,7 @@
 # Smart Resume Builder
 
+https://resume-builder-inky-eight.vercel.app/
+
 A Vite + React resume builder with ATS analysis, AI-assisted drafting, LaTeX export, and print-ready resume previews.
 
 ## Features
